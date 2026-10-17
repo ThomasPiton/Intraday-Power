@@ -41,7 +41,7 @@ jobs:
           path: data/raw
           key: raw-${{ github.run_id }}
           restore-keys: raw-
-      - name: Fetch Energy-Charts (forced: DA prices D+1, forecasts, actuals)
+      - name: Fetch Energy-Charts (forced) - DA prices D+1, forecasts, actuals
         if: steps.gate.outputs.go == '1'
         run: python -m intraday_power fetch --only ec --force-ec
       - name: Battery LP
