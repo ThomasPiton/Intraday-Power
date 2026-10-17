@@ -7,3 +7,4 @@ data/raw/
 data/cache/
 scripts/probe_report.json
 scripts/*.log
+*.egg-info/
