@@ -1,0 +1,43 @@
+name: backfill
+# Manual: full history fetch (Energy-Charts since 2015, Elia since 2024-05-22), walk-forward backtest,
+# battery LP on the whole history, alert thresholds, export. Takes ~30-40 min (Energy-Charts rate limits).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt && pip install --no-deps -e .
+      - name: Backfill + backtest
+        run: python -m intraday_power backfill
+      - name: Tests on real data shape
+        run: python -m pytest -q
+      - name: Save raw data cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data data/journal data/models data/state data/backtest
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "data: backfill $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase --quiet && git push && exit 0; sleep 5; done
+          exit 1

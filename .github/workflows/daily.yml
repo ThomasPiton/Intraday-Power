@@ -1,0 +1,71 @@
+name: daily
+# 13:30 Europe/Paris: DA prices for D+1, day-ahead forecasts, battery LP, weekly ML retrain (Mondays).
+# Cron is UTC: 11:30 UTC = 13:30 CEST (summer), 12:30 UTC = 13:30 CET (winter). Both fire; the
+# "gate" step lets only the one that is 13:xx in Paris continue.
+on:
+  schedule:
+    - cron: "30 11 * * *"
+    - cron: "30 12 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Gate on Paris local time (DST)
+        id: gate
+        run: |
+          H=$(TZ=Europe/Paris date +%H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$H" = "13" ] || [ "$H" = "14" ]; then echo "go=1" >> "$GITHUB_OUTPUT"; else echo "Paris hour $H: skip"; fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
+      - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == '1'
+        with:
+          python-version: "3.11"
+          cache: pip
+      - if: steps.gate.outputs.go == '1'
+        run: pip install -r requirements.txt && pip install --no-deps -e .
+      - name: Restore raw data cache
+        if: steps.gate.outputs.go == '1'
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+      - name: Fetch Energy-Charts (forced: DA prices D+1, forecasts, actuals)
+        if: steps.gate.outputs.go == '1'
+        run: python -m intraday_power fetch --only ec --force-ec
+      - name: Battery LP
+        if: steps.gate.outputs.go == '1'
+        run: python -m intraday_power battery
+      - name: Weekly ML retrain (idempotent, Monday cut-off)
+        if: steps.gate.outputs.go == '1'
+        run: python -m intraday_power train
+      - name: Export JSON
+        if: steps.gate.outputs.go == '1'
+        run: python -m intraday_power export
+      - name: Save raw data cache
+        if: always() && steps.gate.outputs.go == '1'
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Commit
+        if: steps.gate.outputs.go == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data data/journal data/models data/state
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "data: update $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase --quiet && git push && exit 0; sleep 5; done
+          exit 1

@@ -1,0 +1,64 @@
+name: update
+# Every 15 min: Elia fetch -> decide (time-critical) -> Energy-Charts (hourly gate) -> settle -> battery -> export -> commit.
+# Off-the-hour minutes are less congested on GitHub's scheduler; a run at :02 decides the QH starting at :15.
+on:
+  schedule:
+    - cron: "2,17,32,47 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt && pip install --no-deps -e .
+
+      - name: Restore raw data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+
+      - name: Fetch Elia (near real time)
+        run: python -m intraday_power fetch --only elia
+      - name: Decide (live, append-only journal)
+        run: python -m intraday_power decide
+      - name: Fetch Energy-Charts (hourly gate, rate limited)
+        run: python -m intraday_power fetch --only ec
+        continue-on-error: true
+      - name: Settle
+        run: python -m intraday_power settle
+      - name: Battery (last days)
+        run: python -m intraday_power battery
+      - name: Export JSON
+        run: python -m intraday_power export
+
+      - name: Save raw data cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data data/journal data/models data/state
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "data: update $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase --quiet && git push && exit 0; sleep 5; done
+          exit 1

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Raw data lives in the GitHub Actions cache and is rebuildable from the APIs (see DECISIONS.md)
+data/raw/
+data/cache/
+scripts/probe_report.json
+scripts/*.log
