@@ -17,6 +17,29 @@ Choices made while building, with the reason. Newest at the bottom of each secti
 | Elia sign convention | Sep 2026: corr(SI, imbalance price) = −0.66; mean price 203 €/MWh when SI < 0 vs 90 when SI > 0. | **SI < 0 = system short = high price.** |
 | Elia regime change | Simulated datasets `ods211`/`ods212`: new imbalance price formula "live as of 24/11/2026 10h, conditional on CREG approval". | Marked on charts (`IMBALANCE_REGIME_CHANGE_UTC`); NRT dataset ids may need to change after that date. |
 
+## V2 Step 0 — new data sources (probe run 2026-10-18, `scripts/probe_sources_v2.py`)
+
+Every source in PLAN_V2 §3 answered without a key or sign-up. Only ENTSO-E needs a token (401 without one), so it stays in Data gaps.
+
+| Source | Finding | Consequence |
+|---|---|---|
+| Open-Meteo forecast | 16 days hourly, multi-point in one call (comma-separated lat/lon); all vars in PLAN §3 present (T2m, wind 10/100 m, gusts, GHI/direct/diffuse, cloud cover). | One call per point grid per refresh. |
+| Open-Meteo ensemble | `ecmwf_ifs025`: 50 members, 15 days. `icon_seamless`: 39 members, 7 days. Members exposed as `<var>_memberNN`. | 7-day bands from ICON for DE, ECMWF for 7–14 day temperature anomaly. |
+| Open-Meteo historical forecast | Available from 2021-03 (probe) to yesterday; `previous-runs-api` gives `<var>_previous_dayN` (forecast as issued N days before). | Enables forecast vs actual at fixed lead time without storing our own vintages. |
+| Open-Meteo ERA5 | `models=era5` from 1940-01-01; **~6 days latency** (last value 2026-10-12 on 10-18). Without `models` (best match) the archive is filled to today. 2 points × 1 year in one call: fine. | Normals from ERA5 (e.g. 1991–2020); recent "observed" weather from best-match archive, labelled as such. |
+| ODRÉ éCO2mix national | Full continuity at 15 min: `eco2mix-national-cons-def` "définitives" 2012-01 → 2025-12, "consolidées" 2026-01 → 2026-08; `eco2mix-national-tr` from 2026-09-01 (rolling) to now, with `prevision_j1` already published for tomorrow. Fields: consumption, J-1/J forecasts, production by fuel, CO2 rate, commercial exchanges per border. Licence Ouverte v2.0 (Etalab). `/exports/parquet` works. | Fetcher stitches def → consolidated → TR with `nature` kept as a column; TR overwrites only the latest window. |
+| ODRÉ quota | Header `X-RateLimit-Limit: 10000000`, daily reset (not the 50 000/month in PLAN §3). | Quota is not a constraint at 15-min cadence; still use parquet exports for backfill. |
+| ODRÉ nuclear | `production-nette-nucleaire`: hourly net output (GW) **2001-01 → 2026-08** only (monthly release, not live). | Long nuclear history from ODRÉ; recent nuclear from éCO2mix TR. Unit-level outages remain a Data gap. |
+| ODRÉ capacity | `parc-prod-par-filiere` yearly 2007–2025 (MW by fuel, some `NC` strings); `parc-national-annuel-prod-eolien-solaire` 2001–2025. Bonus: `rayonnement-solaire-vitesse-vent-tri-horaires-regionaux` (3-hourly regional GHI + 100 m wind, 2016 → 2026-10). | Parse `NC` as null. RTE regional weather is a candidate cross-check for our wind/solar grid. |
+| Energy-Charts new endpoints | `installed_power`: DE monthly 2002 → 2026-10 (incl. battery power/capacity, Solar AC/DC); **FR yearly only** 2014–2025 (`monthly` → 404 for FR). `cbpf` (cross-border physical flows) DE 15-min per neighbour. `frequency` DE-Freiburg 1-second (86 341 pts/day). `public_power` FR includes load and residual load. `total_power` → 404 for FR. | Capacities: DE from EC monthly, FR from ODRÉ/EC yearly. Frequency stored downsampled (1-min stats), raw only for the last day. |
+| SMARD | `chart_data/{filter}/{region}/index_quarterhour.json` then weekly blocks. 410 load, 411 load forecast, 4067 wind onshore, 1225 offshore, 4068 PV, 4359 residual load, 4169 DE-LU price: history from 2014-12 (price 2018-10). Latency ~1 h on actuals; forecast and price extend into tomorrow. | Complement to Energy-Charts for DE load forecast. |
+| Elexon Insights | Demand outturn, system prices (SSP/SBP, NIV), market index (APX and N2EX rows: N2EX = 0, drop it), REMIT list, `UOU2T14D` (per unit) and `FOU2T14D` (per fuel) 2–14 day availability: all 200, no key. | GB rows in Data Hub use APX market index only. |
+| Energinet | `ImbalancePrice` (15 min, DK1/DK2, ~30–40 min latency on imbalance price), `CO2Emis` and `CO2EmisProg` at 5 min. | — |
+| NVE | **No key** confirmed. `HentOffentligData` full weekly history from 1995 (per area EL 1–5 and VASS); `HentOffentligDataMinMaxMedian` gives min/median/max per ISO week; next publication date in payload (Wednesdays 13:00). | Weekly cron; band chart against historical median. |
+| ENTSOG | `operationaldatas` for Physical Flow and Nomination, daily gas day (06:00–06:00 local), kWh/d, per point and direction. | Need a fixed list of points (FR/DE entries) before backfill. |
+| Elering | `nps/price` gives EE, FI, LV, LT at 15 min. | Nordics/Baltics row = FI + Baltics (no NO/SE from this source). |
+| REE | `precios-mercados-tiempo-real` returns spot (15 min) and PVPC. | Spain row uses "Spot market price". |
+
 ## Architecture
 
 - **Raw data is not committed.** 160 MB of Parquet rewritten every 15 min would bloat git by GBs per month. `data/raw/` lives in the GitHub Actions cache (restored and re-saved each run) and is rebuildable from the APIs: the live fetch rebuilds 45 days automatically if the cache is lost, the weekly retrain refetches Elia history if needed, and `backfill.yml` rebuilds everything.
