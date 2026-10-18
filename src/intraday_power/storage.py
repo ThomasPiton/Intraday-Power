@@ -32,8 +32,10 @@ def upsert(df: pd.DataFrame, source: str, series: str, keys: list[str],
     if df is None or df.empty:
         return 0
     df = df.copy()
-    for k in keys:
-        if pd.api.types.is_datetime64_any_dtype(df[k]) or df[k].dtype == object:
+    for i, k in enumerate(keys):
+        # Time keys are normalised to UTC ns; other object keys (e.g. a weather point id) stay strings.
+        if pd.api.types.is_datetime64_any_dtype(df[k]) or (df[k].dtype == object and (
+                i == 0 or isinstance(df[k].dropna().iloc[0] if df[k].notna().any() else None, pd.Timestamp))):
             df[k] = _ensure_utc(df[k])
     df = df.drop_duplicates(subset=keys, keep="last")
     d = series_dir(source, series, root)

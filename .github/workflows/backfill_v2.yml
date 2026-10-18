@@ -1,0 +1,55 @@
+name: backfill-v2
+# Manual: v2 history (éCO2mix, Energy-Charts power, SMARD since 2023; peripheral sources 4 months;
+# weather grids 2 years and city temperatures since 2016, then temperature normals) and export.
+# Open-Meteo's free quota (~5 000 weighted calls/hour) makes the weather part take about 2.5 hours.
+on:
+  workflow_dispatch:
+    inputs:
+      weather:
+        description: "Include the weather history (slow)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: data-pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  backfill-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt && pip install --no-deps -e .
+      - name: Restore raw data cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}
+          restore-keys: raw-
+      - name: Backfill v2
+        run: python -m intraday_power backfill2 ${{ inputs.weather && ' ' || '--no-weather' }}
+      - name: Export JSON
+        run: python -m intraday_power export
+      - name: Save raw data cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/raw
+          key: raw-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data data/state
+          if git diff --cached --quiet; then echo "nothing to commit"; exit 0; fi
+          git commit -m "data: backfill v2 $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase --quiet && git push && exit 0; sleep 5; done
+          exit 1

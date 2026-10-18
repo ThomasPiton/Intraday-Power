@@ -10,11 +10,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import battery, config, storage
+from . import battery, config
 from .bots.base import Journal
 from .metrics import daily_pnl, pnl_by_hour, stats
 from .pipeline import live_start, now_utc
-from .revisions import load_thresholds, revision_frame
 
 log = logging.getLogger(__name__)
 PARIS = config.TZ_DISPLAY
@@ -48,51 +47,7 @@ def _write(name: str, payload: dict, out_dir: Path | None = None) -> Path:
     return p
 
 
-def _today_paris(now: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
-    lo = now.tz_convert(PARIS).normalize()
-    return lo.tz_convert("UTC"), (lo + pd.Timedelta(days=1)).tz_convert("UTC")
-
-
-def _ts_list(idx) -> list[str]:
-    return [t.isoformat() for t in pd.DatetimeIndex(idx)]
-
-
-# --------------------------------------------------------------------------- data health
-SERIES = [
-    ("energy_charts", f"price_{z}", "price", f"DA price {z}") for z in config.ZONES
-] + [
-    ("energy_charts", f"forecast_{z}", "solar_id", f"ID forecast {z}") for z in config.ZONES
-] + [
-    ("energy_charts", f"actual_{z}", "solar", f"Actuals {z}") for z in config.ZONES
-] + [
-    ("elia", "imb_qh", "imb_price", "BE imbalance price (QH)"),
-    ("elia", "imb_min_recent", "imb_price", "BE imbalance price (min)"),
-    ("elia", "si_min", "si", "BE system imbalance (min)"),
-    ("elia", "si_fc", "si_fc", "BE SI forecast (Elia)"),
-]
-
-
-def data_health() -> list[dict]:
-    out = []
-    for src, ser, col, label in SERIES:
-        try:
-            last = storage.last_timestamp(src, ser, col)
-        except Exception:  # corrupted partition etc.
-            last = None
-        out.append({"series": label, "source": src, "last": last})
-    return out
-
-
 # --------------------------------------------------------------------------- loaders
-def _prices(start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
-    cols = {}
-    for z in config.ZONES:
-        p = storage.read("energy_charts", f"price_{z}", start, end)
-        if len(p):
-            cols[z] = p.set_index("ts")["price"]
-    return pd.DataFrame(cols).sort_index()
-
-
 def _all_trades() -> pd.DataFrame:
     """Backtest + live settled/pending rows with a ``segment`` column."""
     frames = []
@@ -115,149 +70,6 @@ def _all_trades() -> pd.DataFrame:
     t = pd.concat(frames, ignore_index=True)
     t["qh_start_utc"] = pd.to_datetime(t["qh_start_utc"], utc=True)
     return t.sort_values(["qh_start_utc", "bot"]).reset_index(drop=True)
-
-
-# --------------------------------------------------------------------------- desk
-def build_alerts(now: pd.Timestamp, prices: pd.DataFrame, thresholds: dict) -> list[dict]:
-    alerts = []
-    t0, t1 = _today_paris(now)
-    horizon = prices[(prices.index >= t0) & (prices.index < t1 + pd.Timedelta(days=1))]
-    for z in horizon.columns:
-        neg = horizon[z][horizon[z] < 0]
-        if len(neg):
-            alerts.append({"ts": neg.index.min(), "type": "NEG_PRICE", "zone": z, "level": "warn",
-                           "msg": f"{z}: {len(neg)} negative DA quarter-hours, min {neg.min():.2f} EUR/MWh "
-                                  f"({neg.index.min().tz_convert(PARIS):%a %H:%M})"})
-    sp_th = thresholds.get("xzone_spread_p95_eur")
-    if sp_th and len(horizon.columns) > 1:
-        h = horizon.dropna()
-        spread = h.max(axis=1) - h.min(axis=1)
-        big = spread[spread > sp_th]
-        if len(big):
-            q = big.idxmax()
-            alerts.append({"ts": q, "type": "XZONE_SPREAD", "zone": f"{h.loc[q].idxmax()}-{h.loc[q].idxmin()}",
-                           "level": "info",
-                           "msg": f"Cross-zone DA spread {big.max():.1f} EUR/MWh at {q.tz_convert(PARIS):%a %H:%M} "
-                                  f"({h.loc[q].idxmax()} vs {h.loc[q].idxmin()}); {len(big)} QH above p95 {sp_th:.0f}"})
-    rev_th = thresholds.get("revision_p95_mw", {})
-    for z in config.ZONES:
-        th = rev_th.get(z)
-        if not th:
-            continue
-        r = revision_frame(z, now - pd.Timedelta(hours=6), now + pd.Timedelta(hours=12))
-        if r.empty:
-            continue
-        big = r["revision_mw"][r["revision_mw"].abs() > th]
-        if len(big):
-            q = big.abs().idxmax()
-            alerts.append({"ts": q, "type": "REVISION", "zone": z, "level": "warn",
-                           "msg": f"{z}: renewables revision {big[q]:+,.0f} MW at {q.tz_convert(PARIS):%a %H:%M} "
-                                  f"(|rev| > p95 {th:,.0f} MW on {len(big)} QH)"})
-    spike_th = thresholds.get("be_imb_spike_p99_eur")
-    imb = storage.read("elia", "imb_qh", now - pd.Timedelta(hours=6), now)
-    if spike_th and len(imb) and "BE" in prices:
-        s = imb.set_index("ts")["imb_price"] - prices["BE"].reindex(imb["ts"]).values
-        big = s[s.abs() > spike_th]
-        for q, v in big.tail(5).items():
-            alerts.append({"ts": q, "type": "IMB_SPIKE", "zone": "BE", "level": "alert",
-                           "msg": f"BE imbalance price {imb.set_index('ts').at[q, 'imb_price']:,.0f} EUR/MWh at "
-                                  f"{q.tz_convert(PARIS):%H:%M}, {v:+,.0f} vs DA (|x| > p99 {spike_th:.0f})"})
-    return sorted(alerts, key=lambda a: a["ts"], reverse=True)
-
-
-def export_desk(now: pd.Timestamp, trades: pd.DataFrame, thresholds: dict) -> dict:
-    t0, t1 = _today_paris(now)
-    prices = _prices(t0 - pd.Timedelta(days=1), t1 + pd.Timedelta(days=1))
-    cur = now.floor("15min")
-    ticker = []
-    for z in config.ZONES:
-        s = prices.get(z)
-        if s is None or s.dropna().empty:
-            ticker.append({"zone": z, "price": None})
-            continue
-        today = s[(s.index >= t0) & (s.index < t1)].dropna()
-        ticker.append({"zone": z, "qh": cur, "price": s.get(cur), "prev": s.get(cur - config.QH),
-                       "next": s.get(cur + config.QH),
-                       "day_avg": today.mean() if len(today) else None,
-                       "day_min": today.min() if len(today) else None,
-                       "day_max": today.max() if len(today) else None})
-    strip = prices[(prices.index >= t0) & (prices.index < t1)]
-
-    bots_today = {}
-    live = trades[trades["segment"] == "live"] if len(trades) else trades
-    for b in config.BOTS:
-        g = live[(live["bot"] == b) & (live["qh_start_utc"] >= t0) & (live["qh_start_utc"] < t1)] if len(live) else live
-        settled = g[g["status"] == "settled"] if len(g) else g
-        lastpos = live[live["bot"] == b].sort_values("qh_start_utc").tail(1) if len(live) else live
-        bots_today[b] = {
-            "pnl": float(settled["pnl"].sum()) if len(settled) else 0.0,
-            "trades": int((settled["position"] != 0).sum()) if len(settled) else 0,
-            "pending": int((g["status"] == "pending").sum()) if len(g) else 0,
-            "has_live": bool(len(live)),
-            "last_qh": lastpos["qh_start_utc"].iloc[0] if len(lastpos) else None,
-            "last_position": int(lastpos["position"].iloc[0]) if len(lastpos) else None,
-        }
-
-    be = {}
-    si = storage.read("elia", "si_min", now - pd.Timedelta(hours=3), now + pd.Timedelta(hours=1))
-    if len(si):
-        last = si.dropna(subset=["si"]).iloc[-1]
-        be["si_min"] = {"ts": last["ts"], "si": last["si"]}
-        tail = si[si["ts"] >= now - pd.Timedelta(hours=2)]
-        be["si_spark"] = {"ts": _ts_list(tail["ts"]), "si": tail["si"].tolist()}
-    imb = storage.read("elia", "imb_qh", now - pd.Timedelta(hours=6), now + pd.Timedelta(hours=1))
-    if len(imb):
-        last = imb.dropna(subset=["imb_price"]).iloc[-1]
-        da = prices["BE"].get(last["ts"]) if "BE" in prices else None
-        be["imb_qh"] = {"ts": last["ts"], "price": last["imb_price"], "si": last["si"], "da": da,
-                        "quality": last["quality"]}
-    mn = storage.read("elia", "imb_min_recent", now - pd.Timedelta(hours=2), now + pd.Timedelta(hours=1))
-    if len(mn):
-        last = mn.dropna(subset=["imb_price"]).iloc[-1]
-        be["imb_min"] = {"ts": last["ts"], "price": last["imb_price"]}
-    fc = storage.read("elia", "si_fc", now - pd.Timedelta(hours=1), now + pd.Timedelta(hours=1))
-    if len(fc):
-        last = fc.sort_values("pred_time").iloc[-1]
-        be["si_fc"] = {"pred_time": last["pred_time"], "target": last["target"], "si_fc": last["si_fc"],
-                       "p_short": last["p_lt_m400"] + last["p_m400_m200"], "p_long": last["p_200_400"] + last["p_gt_400"]}
-    return {"ticker": ticker, "strip": {"ts": _ts_list(strip.index), **{z: strip[z].tolist() for z in strip}},
-            "bots_today": bots_today, "be": be, "alerts": build_alerts(now, prices, thresholds)[:30]}
-
-
-# --------------------------------------------------------------------------- revisions
-def export_revisions(now: pd.Timestamp, thresholds: dict) -> dict:
-    t0, t1 = _today_paris(now)
-    y0 = t0 - pd.Timedelta(days=1)
-    grid = pd.date_range(y0, t1, freq="15min", inclusive="left")
-    heat, zones_series = [], {}
-    for zi, z in enumerate(config.ZONES):
-        r = revision_frame(z, y0 - pd.Timedelta(days=1), t1 + pd.Timedelta(days=1))
-        if r.empty:
-            zones_series[z] = None
-            continue
-        rv = r["revision_mw"].reindex(grid)
-        for xi, v in enumerate(rv.values):
-            if pd.notna(v):
-                heat.append([xi, zi, round(float(v), 1)])
-        w = r[(r.index >= y0 - pd.Timedelta(days=1)) & (r.index < t1 + pd.Timedelta(days=1))]
-        zones_series[z] = {"ts": _ts_list(w.index), "da": w["da_total"].round(1).tolist(),
-                           "id": w["id_total"].round(1).tolist(), "actual": w["actual_total"].round(1).tolist(),
-                           "rev_pct": w["revision_pct"].round(2).tolist()}
-    # BE: revision vs (imbalance - DA), last 30 days
-    start = now - pd.Timedelta(days=30)
-    r = revision_frame("BE", start, now)
-    imb = storage.read("elia", "imb_qh", start, now)
-    da = storage.read("energy_charts", "price_BE", start, now)
-    scatter = {"points": [], "corr": None, "n": 0}
-    if len(r) and len(imb) and len(da):
-        j = pd.DataFrame({"rev": r["revision_mw"],
-                          "spread": imb.set_index("ts")["imb_price"] - da.set_index("ts")["price"]}).dropna()
-        if len(j) > 30:
-            scatter = {"points": j.round(1).values.tolist(), "corr": float(j["rev"].corr(j["spread"])),
-                       "n": len(j), "from": j.index.min(), "to": j.index.max()}
-    return {"grid": _ts_list(grid), "zones": list(config.ZONES), "heatmap": heat, "series": zones_series,
-            "unavailable": config.REVISION_UNAVAILABLE,
-            "be_scatter": scatter, "thresholds": thresholds.get("revision_p95_mw", {})}
 
 
 # --------------------------------------------------------------------------- bots
@@ -333,14 +145,52 @@ def export_battery(now: pd.Timestamp) -> dict:
                        "soc0_mwh": config.BATTERY_SOC0_MWH}}
 
 
+# --------------------------------------------------------------------------- v2 pages
+def export_v2(now: pd.Timestamp) -> dict[str, bool]:
+    """Today / Demand / Supply / Drivers (+ per-country day files) / Data Hub."""
+    from . import datahub_registry, views
+    ok = {}
+    frames = views.build_frames(now)
+
+    def run(name, fn):
+        try:
+            res = fn()
+            ok[name] = True
+            return res
+        except Exception:
+            log.exception("export %s failed", name)
+            ok[name] = False
+            return None
+
+    demand = run("demand", lambda: views.demand_view(frames, now)) or {}
+    if ok["demand"]:
+        _write("demand", demand)
+    supply = run("supply", lambda: views.supply_view(frames, now))
+    if supply is not None:
+        _write("supply", supply)
+    drv = run("drivers", lambda: views.drivers_view(frames, now))
+    drivers = {}
+    if drv is not None:
+        drivers, days = drv
+        _write("drivers", drivers)
+        for z, payload in days.items():
+            _write(f"days_{views.SHORT[z]}", payload)
+    today = run("today", lambda: views.today_view(frames, now, demand, drivers))
+    if today is not None:
+        _write("today", today)
+    hub = run("datahub", lambda: datahub_registry.build(now))
+    if hub is not None:
+        _write("datahub", hub[0])
+        for rid, detail in hub[1].items():       # one small file per row, loaded when the row is opened
+            _write(rid, detail, config.DOCS_DATA / "hub")
+    return ok
+
+
 # --------------------------------------------------------------------------- all
 def export_all(now: pd.Timestamp | None = None) -> None:
     now = now or now_utc()
-    thresholds = load_thresholds()
     trades = _all_trades()
     files = {
-        "desk": lambda: export_desk(now, trades, thresholds),
-        "revisions": lambda: export_revisions(now, thresholds),
         "bots": lambda: export_bots(trades),
         "battery": lambda: export_battery(now),
     }
@@ -352,9 +202,9 @@ def export_all(now: pd.Timestamp | None = None) -> None:
         except Exception:
             log.exception("export %s failed", name)
             ok[name] = False
+    ok.update(export_v2(now))
     _write("meta", {"last_update_utc": now.floor("s"), "live_start_utc": live_start(),
                     "regime_change_utc": config.IMBALANCE_REGIME_CHANGE_UTC,
-                    "stale_after_min": config.STALE_AFTER_MIN, "health": data_health(),
-                    "thresholds": thresholds, "exports_ok": ok, "repo": config.REPO_URL,
+                    "stale_after_min": config.STALE_AFTER_MIN, "exports_ok": ok, "repo": config.REPO_URL,
                     "decision_lead_min": int(config.DECISION_LEAD.total_seconds() // 60),
-                    "rt_lag_qh": config.RT_LAG_QH})
+                    "rt_lag_qh": config.RT_LAG_QH, "attribution": config.OPEN_METEO_ATTRIBUTION})

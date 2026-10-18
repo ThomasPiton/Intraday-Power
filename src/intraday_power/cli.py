@@ -5,9 +5,11 @@ decide     live decisions for the QHs in the decision window (append-only journa
 settle     settle pending live decisions once Elia has published the imbalance price
 battery    solve the battery LP for recent days (``--full`` for the whole history)
 train      weekly ML retrain (idempotent: trains this Monday's model if missing)
-export     write docs/data/*.json for the front-end
+export     write docs/data/*.json for the front-end (v1 bots/battery + v2 pages)
 backfill   full history fetch + rule calibration check + walk-forward backtest + battery + thresholds
 calibrate  print the rule-bot threshold calibration (does not modify config.py)
+fetch2     v2 sources (weather, éCO2mix, SMARD, Elexon, ...), each at its own cadence
+backfill2  v2 history (power since 2023, weather grids 2 years, city temperatures since 2016) + normals
 """
 from __future__ import annotations
 
@@ -22,11 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="intraday_power", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["fetch", "decide", "settle", "battery", "train", "export",
-                                        "backfill", "calibrate", "backtest", "thresholds"])
+                                        "backfill", "calibrate", "backtest", "thresholds", "fetch2", "backfill2"])
     ap.add_argument("--full", action="store_true", help="battery: whole history")
     ap.add_argument("--force-ec", action="store_true", help="fetch: ignore the hourly Energy-Charts gate")
     ap.add_argument("--only", choices=["elia", "ec"], help="fetch: one source only")
     ap.add_argument("--skip-raw", action="store_true", help="backfill: reuse the local raw store")
+    ap.add_argument("--force", action="store_true", help="fetch2: run every job regardless of cadence")
+    ap.add_argument("--jobs", nargs="*", help="fetch2: only these jobs (see config.V2_CADENCE_MIN)")
+    ap.add_argument("--no-weather", action="store_true", help="backfill2: skip the (slow, quota-bound) weather history")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -47,6 +52,13 @@ def main(argv: list[str] | None = None) -> int:
     elif a.command == "export":
         from . import export
         export.export_all()
+    elif a.command == "fetch2":
+        from . import pipeline_v2
+        if "failed" in pipeline_v2.fetch_v2(force=a.force, only=a.jobs).values():
+            return 1          # the workflow step is continue-on-error: shows as a warning
+    elif a.command == "backfill2":
+        from . import pipeline_v2
+        pipeline_v2.backfill_v2(weather_history=not a.no_weather)
     elif a.command == "calibrate":
         best = pipeline.calibrate()
         log.info("best threshold on calibration window: %s MW (config: %s MW)", best, config.RULE_THRESHOLD_MW)

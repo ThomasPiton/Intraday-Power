@@ -40,6 +40,37 @@ Every source in PLAN_V2 §3 answered without a key or sign-up. Only ENTSO-E need
 | Elering | `nps/price` gives EE, FI, LV, LT at 15 min. | Nordics/Baltics row = FI + Baltics (no NO/SE from this source). |
 | REE | `precios-mercados-tiempo-real` returns spot (15 min) and PVPC. | Spain row uses "Spot market price". |
 
+
+## V2 build (2026-10-18)
+
+### Data
+- **Open-Meteo quota drives the weather history.** A call weighs locations × ⌈days/14⌉ (× vars/10 above 10 vars; ensemble members count as variables). City temperatures since 2016 (needed for normals) cost ~5 800 weighted calls, the wind/solar grids since 2024-10 ~2 800: one daily quota. The client keeps a rolling budget (4 000/h, 450/min) and sleeps; `backfill_v2.yml` therefore runs ~2.5 h.
+- **Temperature normals = 2016–2025 (10 years), smoothed ±15 days**, not the WMO 30-year normal: 30 years × 20 cities would need two days of quota, and a recent window suits a warming climate. Written to `data/state/temp_normals.csv` (committed, survives a cache loss). Said in the page text.
+- **Weather "observed" = Open-Meteo archive best match** (ERA5 family; the last ~5 days, before ERA5 is published, come from the ECMWF IFS analysis). Forecast = best match, 16 days, hourly refresh. Ensemble = ECMWF IFS 0.25° ENS, refreshed every 12 h (each refresh ~700 weighted calls); each member is reduced to the country index at fetch time, so only the index per member is stored.
+- **Historic forecast vintages not backfilled** (PLAN step 2 mentioned it): no v2 view uses them ("observe, don't model"). Listed in Data gaps.
+- **SMARD quarter-hour values are energies (MWh per 15 min)**: multiplied by 4 to store MW. Caught by the brief saying wind+solar covered 219% of German demand.
+- **Germany: load and load forecast from SMARD, generation from Energy-Charts**; France: everything from éCO2mix. Energy-Charts `/v2/public_power` is kept whole (`power_<zone>`) at native resolution, no forward-fill.
+- **Installed capacity for capacity factors**: Energy-Charts, monthly for DE, yearly for FR (last value carried forward, so 2026 French capacity factors are slightly overstated).
+- **ENTSOG**: `aggregatedData` returns nothing; entry points come from `interconnections` (cross-border + LNG, storage inside the country excluded). When the country's TSO does not publish a point, the neighbour's exit side is used (NL→DE). Only gas days finished for ≥ 24 h are kept (TSOs publish late); the job re-reads 10 days.
+- **Energinet's firewall answers 403 to our usual User-Agent** (the one containing a URL): Energinet calls send the default `requests` UA.
+- Peripheral fetchers (Energinet, NVE, Elering, REE) live in one module `sources/peripheral.py` instead of four files: each is ~20 lines.
+- Peripheral Data Hub rows keep 120 days; FR/DE power since 2023-01-01.
+
+### Views
+- **Thermosensitivity**: OLS of daily consumption on daily population-weighted temperature, working days only (weekends and national holidays removed), below 15 °C (heating) and above 20 °C (cooling).
+- **Temperature → GW**: France uses RTE's 2.4 GW/°C rule of thumb as specified; Germany uses its own measured heating slope (labelled). Only shown when the normal is below 15 °C.
+- **Dunkelflaute = ≥ 2 consecutive days with daily wind+solar output < 5% of installed wind+solar capacity.** 10% (first try) flagged 67 German episodes in 3.8 years because of Germany's large solar fleet; 5% gives 3 (FR) and 13 (DE), about the lowest 1% / 5% of days.
+- **Negative hours** = negative quarter-hours / 4, so hourly (pre Oct-2025) and 15-min periods count the same.
+- Brief: templates only, each sentence carries the rule id that produced it.
+
+### Front-end
+- One page per hash route, vanilla JS + ECharts 5.5.0 (cdnjs) + topojson-client 3.1.0 and world-atlas 2.0.2 (jsDelivr) for the map outlines. No build step.
+- **No dual-axis chart**: "consumption with temperature superposed" and the v1 battery dispatch are drawn as vertically stacked charts sharing the time axis (ECharts `connect` keeps the crosshairs in sync).
+- **Palette** (dataviz validator, both modes): blue `#2a78d6`, orange `#eb6834`, aqua `#1baf7a`, yellow `#eda100` pass every adjacent-pair check; light-mode aqua/yellow are below 3:1 contrast, so every chart has a legend. The season scatter uses **3 classes (Winter / Spring-Autumn / Summer)**: no 4-colour set from the palette passes the all-pairs normal-vision floor.
+- P10–P90 bands are drawn as polygons (custom series): ECharts stacks along x when both axes are numeric.
+- Data Hub detail series are one file per row (`docs/data/hub/<id>.json`, ~10 KB) loaded on tap; a single file was 470 KB.
+- v1 Desk and Forecast Revisions pages are dropped (not in PLAN_V2); their JSON is no longer exported. Bots and battery JSON are unchanged and the journal is untouched.
+
 ## Architecture
 
 - **Raw data is not committed.** 160 MB of Parquet rewritten every 15 min would bloat git by GBs per month. `data/raw/` lives in the GitHub Actions cache (restored and re-saved each run) and is rebuildable from the APIs: the live fetch rebuilds 45 days automatically if the cache is lost, the weekly retrain refetches Elia history if needed, and `backfill.yml` rebuilds everything.

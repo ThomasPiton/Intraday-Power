@@ -1,0 +1,107 @@
+{
+  "today-brief": {
+    "what": "<p>A handful of sentences about today's market in France and Germany. Each sentence comes from a fixed rule (peak price, negative prices, tomorrow's auction, temperature outlook, renewable share, Dunkelflaute, FR–DE spread) applied to the data on this site.</p>",
+    "why": "<p>It is the 30-second read a trader does first thing: where is the price peak, is anything unusual (negative prices, cold spell, still and dark weather), and how do the two largest continental markets compare.</p>",
+    "how": "<p>No language model: the sentences are templates filled from <code>today.json</code>. Example rule: a temperature sentence appears for each country, saying “colder/warmer than normal” when the mean forecast anomaly of the next 7 days is at least 1 °C, “close to normal” otherwise. The renewable sentence only appears above 50% of consumption. Negative-price driver = the larger of today's wind and solar output.</p>"
+  },
+  "today-price": {
+    "what": "<p>The day-ahead price for each quarter-hour of today, and of tomorrow once the auction results are out (around 12:45 CET). The dashed line is now.</p>",
+    "why": "<p>The day-ahead auction (SDAC) sets the reference price for almost all European power. Its shape shows when the system is tight (evening peak, when solar fades) or long (midday solar, windy nights), which is where intraday and flexibility trading make money.</p>",
+    "how": "<p>Clearing prices of the bidding zone from Energy-Charts (data from Bundesnetzagentur | SMARD.de, CC BY 4.0). Since 1 October 2025 the auction is in 15-minute products; earlier days were hourly.</p>"
+  },
+  "today-load": {
+    "what": "<p>Electricity consumption so far today against the day-ahead forecast published by the grid operator yesterday.</p>",
+    "why": "<p>When actual demand runs above the forecast, the system is shorter than the market planned: intraday and imbalance prices tend to rise. A 1–2 GW error is already worth watching.</p>",
+    "how": "<p>France: RTE éCO2mix consumption and J-1 forecast. Germany: grid load and the TSOs' load forecast from SMARD. Hourly means of the 15/30-minute values.</p>"
+  },
+  "today-res": {
+    "what": "<p>Wind and solar output today, in GW.</p>",
+    "why": "<p>Wind and solar have zero marginal cost: every GW they produce pushes more expensive plants out of the merit order and lowers the price.</p>",
+    "how": "<p>France: RTE éCO2mix. Germany: Energy-Charts public net generation (onshore + offshore wind, solar). Hourly means.</p>"
+  },
+  "demand-scatter": {
+    "what": "<p>Each dot is one working day: the average temperature of the day (x) against the average consumption (y). The shape is a “V” or a hockey stick: consumption rises when it gets cold (heating) and, a little, when it gets hot (cooling).</p>",
+    "why": "<p>Temperature is the first driver of demand in winter. The slope tells you how many GW an error of 1 °C in the weather forecast is worth, which is how traders translate a forecast change into a position.</p>",
+    "how": "<p>Daily means in local time; weekends and public holidays are excluded because demand is structurally lower. Temperature is the mean of 10 cities weighted by urban-area population. The fit lines are ordinary least squares on days below 15 °C (heating) and above 20 °C (cooling). Seasons: Winter = Dec–Feb, Summer = Jun–Aug, the rest are grouped as Spring/Autumn (three colours keep the chart readable for colour-blind readers). Nothing is modelled beyond the straight lines.</p>"
+  },
+  "demand-forecast": {
+    "what": "<p>Actual consumption (filled line) against the official forecasts, with the population-weighted temperature underneath on its own axis.</p>",
+    "why": "<p>The official forecast is what the market traded on. The gap between actual and forecast is a direct source of imbalance: days when temperature surprises are also days when the forecast misses.</p>",
+    "how": "<p>France: RTE <em>prévision J-1</em> (published the day before) and <em>prévision J</em> (updated during the day). Germany: TSOs' day-ahead load forecast from SMARD. Error statistics use the last 30 days of hourly values.</p>"
+  },
+  "demand-anomaly": {
+    "what": "<p>The temperature forecast for the next 15 days against the normal for each date, with the spread of the ECMWF ensemble (P10–P90). The bars below translate the gap to normal into an indicative change in consumption.</p>",
+    "why": "<p>Week-ahead and month-ahead power prices move on these forecasts. A cold anomaly of 3 °C in France is roughly 7 GW of extra demand, which has to be met by the most expensive plants or by imports.</p>",
+    "how": "<p>Forecast: Open-Meteo best-match model, daily mean of the population-weighted index. Normal: mean of the same index for that day of year over 2016–2025 (ERA5 reanalysis), smoothed over ±15 days. This is a recent 10-year normal, not the official 30-year one. Ensemble: 51 members of ECMWF IFS ENS. GW effect: France uses RTE's rule of thumb (about 2.4 GW per °C in winter, a published order of magnitude, not a model); Germany uses the heating slope measured on this page. Shown only when the normal is below 15 °C (heating season).</p>"
+  },
+  "supply-wind": {
+    "what": "<p>The observed relation between wind speed at 100 m (averaged over 15 points on the main wind areas) and the national wind capacity factor (output divided by installed capacity). Grey dots are a sample of hours; the line is the median per 0.5 m/s bin, with the P10–P90 band.</p>",
+    "why": "<p>It is the bridge between a weather forecast and a production forecast. The curve is steep between 5 and 11 m/s: a forecast error of 1 m/s there moves national output by several GW.</p>",
+    "how": "<p>Wind: Open-Meteo reanalysis (ERA5 family), simple mean of the grid points, no learned weights. Output: RTE (FR) and Energy-Charts (DE). Capacity: Energy-Charts installed power (monthly for DE, yearly for FR, last value carried forward). The spread is large because one average wind speed cannot describe a whole country, curtailment and offshore/onshore mix.</p>"
+  },
+  "supply-solar": {
+    "what": "<p>Solar radiation on a horizontal surface (GHI, averaged over 10 sunny points) against the national solar capacity factor, during daylight hours.</p>",
+    "why": "<p>Solar output is almost linear in radiation, so a cloudy forecast translates directly into lost GW at midday, which is when solar sets the price in spring and summer.</p>",
+    "how": "<p>GHI from Open-Meteo reanalysis; solar output from RTE (FR) and Energy-Charts (DE); AC installed capacity from Energy-Charts. Hours with GHI below 5 W/m² are excluded. Bins of 50 W/m²; median and P10–P90.</p>"
+  },
+  "supply-sunny": {
+    "what": "<p>The sunniest and the cloudiest day of the last 60 days, as solar output by hour.</p>",
+    "why": "<p>The gap between the two curves is the range a solar forecast has to cover. On a sunny day the midday trough in residual load deepens and prices can turn negative.</p>",
+    "how": "<p>Days ranked by mean GHI over the solar grid; output from RTE (FR) or Energy-Charts (DE); energy = sum of hourly GW.</p>"
+  },
+  "supply-outlook": {
+    "what": "<p>Top: the weather index for the coming week (deterministic forecast, ensemble P10–P90 band, and the observed values of the last two days). Bottom: the official day-ahead production forecast published by the TSOs and the actual output.</p>",
+    "why": "<p>The band shows how confident the weather models are. A wide band on a windy day means a large range of possible wind output, and therefore of prices.</p>",
+    "how": "<p>Forecast: Open-Meteo best match. Ensemble: ECMWF IFS 0.25° ENS (50 members + control), each member reduced to the same grid mean, then P10/P50/P90 per hour. Official forecasts cover today and tomorrow only (Energy-Charts). Nothing is converted from weather to GW here, to stay descriptive.</p>"
+  },
+  "supply-map": {
+    "what": "<p>The forecast wind (arrows, length proportional to speed, pointing where the wind blows to) on the wind grid and the cloud cover (discs, darker = cloudier) on the solar grid, every 3 hours over the next 48 hours.</p>",
+    "why": "<p>Weather fronts move from west to east: a front reaching Brittany tonight reaches northern Germany tomorrow. The map shows when each country's wind and solar will pick up or drop.</p>",
+    "how": "<p>Open-Meteo forecast at each grid point; country outlines from Natural Earth (world-atlas). Use the slider to move through time.</p>"
+  },
+  "drivers-day": {
+    "what": "<p>One day, four layers: ① the weather, ② consumption with wind and solar, ③ the residual load (what the rest of the fleet must produce), ④ the price. Pick a date or a remarkable day.</p>",
+    "why": "<p>This is the chain behind every price: weather → demand and renewables → residual load → which plant sets the price. Reading the four layers together explains most of the price shape.</p>",
+    "how": "<p>Hourly values in local time. Residual load = consumption − wind − solar (France: RTE; Germany: SMARD load, Energy-Charts generation). Remarkable days are picked over the last 12 months by simple rules (highest/lowest daily mean price, highest renewable capacity factor, coldest day, latest Dunkelflaute).</p>"
+  },
+  "drivers-merit": {
+    "what": "<p>Each dot is one hour of the last 12 months: residual load (x) against the day-ahead price (y). The dark line is the median price per 2.5 GW bin.</p>",
+    "why": "<p>This is the merit order seen from the market: when residual load is low, cheap plants (nuclear, hydro, lignite) set the price; as it rises, gas and then peakers take over and the curve steepens. Gas and CO₂ prices move the whole curve up or down.</p>",
+    "how": "<p>Hourly means; a random sample of 4,000 hours is drawn, the median and P10–P90 use all hours. Bins with fewer than 15 hours are hidden. In France the correlation is weaker because nuclear availability and exports matter as much as residual load.</p>"
+  },
+  "drivers-negative": {
+    "what": "<p>How many hours per month the day-ahead price was below zero, and the latest days with negative prices.</p>",
+    "why": "<p>Negative prices happen when inflexible output (solar, wind, must-run plants) exceeds what can be consumed or exported. They are a direct signal of the value of flexibility: a battery or a flexible load is paid to consume.</p>",
+    "how": "<p>Count of negative quarter-hours divided by 4. Before October 2025 the day-ahead was hourly, so one negative hour counts as 4 quarter-hours: the unit stays consistent.</p>"
+  },
+  "drivers-dunkel": {
+    "what": "<p>The daily capacity factor of wind and solar together over the last 12 months. Orange bars are “dark and still” days; two or more in a row form a Dunkelflaute episode, listed below.</p>",
+    "why": "<p>Dunkelflaute (German for “dark doldrums”) is the hardest situation for a renewable-heavy system: thermal plants, imports and storage must cover almost all demand, usually in winter, and prices rise.</p>",
+    "how": "<p>Daily mean (wind + solar output) ÷ (installed wind + solar capacity). A day counts when it is below 5%; that is about the lowest 1% of days in France and 5% in Germany since 2023. The threshold is a choice, stated here, not a standard.</p>"
+  },
+  "hub": {
+    "what": "<p>The list of every free source used, with its licence, and how many Data Hub rows come from it.</p>",
+    "why": "<p>Knowing who publishes what, how fast, and under which licence is half the job of a market analyst.</p>",
+    "how": "<p>All sources are called without a key. Refresh: éCO2mix and Elia every 15 min, Energy-Charts, Open-Meteo, SMARD, Elexon and Energinet hourly, ENTSOG, Elering and REE every 6 hours, NVE daily (it publishes weekly), capacities weekly.</p>"
+  },
+  "flex-bots": {
+    "what": "<p>Cumulative profit of two paper-trading bots that take a 1 MW position on each Belgian quarter-hour, bought at the day-ahead price and settled at the Elia imbalance price.</p>",
+    "why": "<p>It is a test of whether the real-time state of the grid (system imbalance, Elia's forecast) predicts the imbalance price. The live record, never reset, is the only part that cannot be overfitted.</p>",
+    "how": "<p>pnl = position × (imbalance price − DA price) × 0.25 h − 0.5 €/MWh × |position| × 0.25 h. Decisions are taken 20 minutes before the quarter-hour with data up to Q−3 only; a unit test scrambles everything outside that information set. See Learn → Flexibility.</p>"
+  },
+  "flex-stats": {
+    "what": "<p>Summary statistics of both bots for the backtest, the live period, or both.</p>",
+    "why": "<p>Hit ratio and P&amp;L per trade say whether the edge is broad or relies on a few spikes; the drawdown says how painful it would have been to hold.</p>",
+    "how": "<p>Sharpe = mean / standard deviation of daily P&amp;L × √365; exposure = trades / decided quarter-hours.</p>"
+  },
+  "flex-battery": {
+    "what": "<p>What a 1 MW / 2 MWh battery could have earned by charging at the cheapest and discharging at the most expensive day-ahead quarter-hours, in five bidding zones.</p>",
+    "why": "<p>It ranks markets by the value of daily price spreads, which is the first number a storage developer looks at.</p>",
+    "how": "<p>A linear programme per zone and day with perfect foresight on day-ahead prices: 88% round-trip efficiency, at most 2 cycles per day, half full at the start and end of each day. A theoretical maximum: no intraday, no ancillary services, no degradation.</p>"
+  },
+  "flex-dispatch": {
+    "what": "<p>The optimal schedule of the latest complete day: price, charge/discharge and state of charge, on three aligned charts.</p>",
+    "why": "<p>You can see the battery buy the midday solar trough and sell the evening peak: the typical daily cycle of a solar-heavy system.</p>",
+    "how": "<p>Output of the same LP as the league (HiGHS solver).</p>"
+  }
+}

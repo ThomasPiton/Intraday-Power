@@ -152,3 +152,60 @@ def fetch_actuals(client: EnergyChartsClient, zone: str, start: str, end: str) -
     cols = [c for c in config.EC_PRODUCTION_TYPES if c in df]
     qh = to_quarter_hours(df[["ts", *cols]], cols, j.get("interval_minutes"))
     return storage.upsert(qh, "energy_charts", f"actual_{zone}", ["ts"])
+
+
+# --------------------------------------------------------------------------- v2 fetchers (FR, DE-LU)
+def fetch_power(client: EnergyChartsClient, zone: str, start: str, end: str) -> int:
+    """Every public_power series (load, residual load, each fuel) at native resolution, no forward-fill."""
+    z = config.ZONES[zone]
+    df = payload_to_frame(client.get("/v2/public_power", {"country": z.country, "start": start, "end": end}))
+    if df.empty:
+        log.warning("power %s %s..%s: no data", zone, start, end)
+        return 0
+    return storage.upsert(df, "energy_charts", f"power_{zone}", ["ts"])
+
+
+def _snake(name: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in name.lower()).strip("_")
+
+
+def _unix_frame(j: dict | None, key: str) -> pd.DataFrame:
+    """Classic (non-/v2) envelope: ``unix_seconds`` + a list of {name, data} under ``key``."""
+    if not j or not j.get("unix_seconds"):
+        return pd.DataFrame()
+    df = pd.DataFrame({_snake(s["name"]): s["data"] for s in j.get(key, [])})
+    df.insert(0, "ts", pd.to_datetime(j["unix_seconds"], unit="s", utc=True))
+    return df
+
+
+def fetch_installed(client: EnergyChartsClient, zone: str) -> int:
+    """Installed net capacity (GW). Monthly for DE; Energy-Charts only has yearly values for FR."""
+    z = config.ZONES[zone]
+    step = "monthly" if z.country == "de" else "yearly"
+    j = client.get("/installed_power", {"country": z.country, "time_step": step, "installation_decommission": "false"})
+    if not j or not j.get("time"):
+        return 0
+    fmt = "%m.%Y" if step == "monthly" else "%Y"
+    df = pd.DataFrame({_snake(p["name"]): p["data"] for p in j.get("production_types", [])})
+    df.insert(0, "ts", pd.to_datetime(j["time"], format=fmt).tz_localize("UTC"))
+    return storage.upsert(df, "energy_charts", f"installed_{zone}", ["ts"])
+
+
+def fetch_cbpf(client: EnergyChartsClient, zone: str, start: str, end: str) -> int:
+    """Cross-border physical flows per neighbour (GW; positive = import into ``zone``)."""
+    z = config.ZONES[zone]
+    df = _unix_frame(client.get("/cbpf", {"country": z.country, "start": start, "end": end}), "countries")
+    if df.empty:
+        return 0
+    return storage.upsert(df, "energy_charts", f"cbpf_{zone}", ["ts"])
+
+
+def fetch_frequency(client: EnergyChartsClient, start: str, end: str, region: str = "DE-Freiburg") -> int:
+    """Grid frequency at 1 s, stored as per-minute mean/min/max (Hz)."""
+    j = client.get("/frequency", {"region": region, "start": start, "end": end})
+    if not j or not j.get("unix_seconds"):
+        return 0
+    s = pd.Series(j["data"], index=pd.to_datetime(j["unix_seconds"], unit="s", utc=True), dtype="float64")
+    m = s.resample("1min").agg(["mean", "min", "max"]).dropna().rename_axis("ts").reset_index()
+    m.columns = ["ts", "f_mean", "f_min", "f_max"]
+    return storage.upsert(m, "energy_charts", "frequency_DE", ["ts"])

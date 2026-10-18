@@ -1,5 +1,6 @@
 name: update
-# Every 15 min: Elia fetch -> decide (time-critical) -> Energy-Charts (hourly gate) -> settle -> battery -> export -> commit.
+# Every 15 min: Elia fetch -> decide (time-critical) -> Energy-Charts (hourly gate) -> v2 sources (own cadences)
+# -> settle -> battery -> export -> commit.
 # Off-the-hour minutes are less congested on GitHub's scheduler; a run at :02 decides the QH starting at :15.
 on:
   schedule:
@@ -16,7 +17,7 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 14
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,6 +39,9 @@ jobs:
         run: python -m intraday_power decide
       - name: Fetch Energy-Charts (hourly gate, rate limited)
         run: python -m intraday_power fetch --only ec
+        continue-on-error: true
+      - name: Fetch v2 sources (weather, ÈCO2mix, SMARD, Elexon, ... at their own cadence)
+        run: python -m intraday_power fetch2
         continue-on-error: true
       - name: Settle
         run: python -m intraday_power settle
