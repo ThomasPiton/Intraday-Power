@@ -17,7 +17,9 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -39,9 +41,11 @@ jobs:
         run: python -m intraday_power decide
       - name: Fetch Energy-Charts (hourly gate, rate limited)
         run: python -m intraday_power fetch --only ec
+        timeout-minutes: 9
         continue-on-error: true
-      - name: Fetch v2 sources (weather, ÈCO2mix, SMARD, Elexon, ... at their own cadence)
+      - name: Fetch v2 sources (weather, √©CO2mix, SMARD, Elexon, ... at their own cadence)
         run: python -m intraday_power fetch2
+        timeout-minutes: 6
         continue-on-error: true
       - name: Settle
         run: python -m intraday_power settle

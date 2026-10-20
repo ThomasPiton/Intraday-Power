@@ -119,7 +119,9 @@ def _fetch_live_ec(now: pd.Timestamp, st: dict, force_ec: bool) -> None:
     last_da_fc = pd.Timestamp(st["ec_dafc"]) if "ec_dafc" in st else None
     need_dafc = force_ec or last_da_fc is None or now - last_da_fc >= pd.Timedelta(hours=6)
     if need_hourly or need_prices:
-        fcs = (("intraday",) if need_hourly else ()) + (("day-ahead",) if need_dafc and need_hourly else ())
+        # One forecast type per run: both = 30 calls at 31 s on one endpoint, longer than the job
+        # timeout. When the DA forecasts are due they replace that hour's intraday refresh.
+        fcs = (("day-ahead",) if need_dafc else ("intraday",)) if need_hourly else ()
         fetch_energy_charts(d0, d2, prices=need_prices, forecasts=fcs, actuals=need_hourly)
         if need_hourly:
             st["ec_hourly"] = now.isoformat()
